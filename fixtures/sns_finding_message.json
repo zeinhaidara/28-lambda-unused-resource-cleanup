@@ -1,0 +1,29 @@
+{
+  "findings": [
+    {
+      "kind": "elastic_ip",
+      "resource_id": "eipalloc-0123456789abcdef0",
+      "reason": "not associated with any network interface",
+      "region": "us-east-1"
+    },
+    {
+      "kind": "ami",
+      "resource_id": "ami-0123456789abcdef0",
+      "reason": "unused and 204 days old (threshold 90)",
+      "region": "us-east-1"
+    },
+    {
+      "kind": "security_group",
+      "resource_id": "sg-0123456789abcdef0",
+      "reason": "not referenced by any network interface",
+      "region": "us-east-1"
+    },
+    {
+      "kind": "load_balancer",
+      "resource_id": "arn:aws:elasticloadbalancing:us-east-1:123456789012:loadbalancer/app/old-example/0123456789abcdef",
+      "reason": "no healthy registered targets in any target group",
+      "region": "us-east-1"
+    }
+  ],
+  "count": 4
+}
