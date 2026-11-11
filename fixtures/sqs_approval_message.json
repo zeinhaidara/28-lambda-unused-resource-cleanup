@@ -1,0 +1,14 @@
+{
+  "items": [
+    {
+      "kind": "elastic_ip",
+      "resource_id": "eipalloc-0123456789abcdef0",
+      "region": "us-east-1"
+    },
+    {
+      "kind": "security_group",
+      "resource_id": "sg-0123456789abcdef0",
+      "region": "us-east-1"
+    }
+  ]
+}
