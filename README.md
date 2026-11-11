@@ -1,4 +1,4 @@
-# Unused resource cleanup
+# Unused AWS resource cleanup Lambda
 
 Scheduled AWS Lambda pair that finds unused EC2/ELB resources and deletes
 only what a human has explicitly approved.
@@ -86,7 +86,7 @@ Sample messages are in `fixtures/sns_finding_message.json` and
 actions each Lambda needs are in `iam/scanner-policy.json` and
 `iam/cleanup-policy.json`.
 
-## Limits
+## Known limitations
 
 - Load balancer orphan detection only inspects target health, not request
   metrics, access logs, or listener rules.
@@ -118,7 +118,7 @@ findings. Running the cleanup Lambda twice on the same approval message is
 safe: the second run's re-check will find each resource already gone (for
 successfully deleted items) and skip it rather than erroring.
 
-## Testing status
+## Validation level
 
 Tested: scan logic for all four resource kinds (including protect-tag and
 age-threshold negative cases), SNS publish payload shape, cleanup re-check
