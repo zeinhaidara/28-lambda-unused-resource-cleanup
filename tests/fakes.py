@@ -4,8 +4,19 @@ from __future__ import annotations
 import copy
 
 
+def _page(items: list[dict], token: str | None, size: int | None) -> tuple[list[dict], str | None]:
+    """Slice one page. size=None means everything in one page, like a small account."""
+    if size is None:
+        return copy.deepcopy(items), None
+    start = int(token or 0)
+    nxt = str(start + size) if start + size < len(items) else None
+    return copy.deepcopy(items[start : start + size]), nxt
+
+
 class FakeEC2:
-    def __init__(self):
+    def __init__(self, page_size: int | None = None):
+        self.page_size = page_size
+        self.page_tokens: dict[str, list] = {"instances": [], "enis": []}
         self.addresses: list[dict] = []
         self.images: list[dict] = []
         self.reservations: list[dict] = []
@@ -29,8 +40,13 @@ class FakeEC2:
             images = [i for i in images if i["ImageId"] in ImageIds]
         return {"Images": copy.deepcopy(images)}
 
-    def describe_instances(self) -> dict:
-        return {"Reservations": copy.deepcopy(self.reservations)}
+    def describe_instances(self, NextToken: str | None = None) -> dict:
+        self.page_tokens["instances"].append(NextToken)
+        items, nxt = _page(self.reservations, NextToken, self.page_size)
+        page = {"Reservations": items}
+        if nxt:
+            page["NextToken"] = nxt
+        return page
 
     def describe_security_groups(self, GroupIds: list[str] | None = None) -> dict:
         groups = self.security_groups
@@ -38,8 +54,13 @@ class FakeEC2:
             groups = [g for g in groups if g["GroupId"] in GroupIds]
         return {"SecurityGroups": copy.deepcopy(groups)}
 
-    def describe_network_interfaces(self) -> dict:
-        return {"NetworkInterfaces": copy.deepcopy(self.network_interfaces)}
+    def describe_network_interfaces(self, NextToken: str | None = None) -> dict:
+        self.page_tokens["enis"].append(NextToken)
+        items, nxt = _page(self.network_interfaces, NextToken, self.page_size)
+        page = {"NetworkInterfaces": items}
+        if nxt:
+            page["NextToken"] = nxt
+        return page
 
     def release_address(self, AllocationId: str) -> dict:
         self.released_allocation_ids.append(AllocationId)
@@ -58,7 +79,9 @@ class FakeEC2:
 
 
 class FakeELBv2:
-    def __init__(self):
+    def __init__(self, page_size: int | None = None):
+        self.page_size = page_size
+        self.markers: list[str | None] = []
         self.load_balancers: list[dict] = []
         self.tags_by_arn: dict[str, list[dict]] = {}
         self.target_groups_by_lb_arn: dict[str, list[dict]] = {}
@@ -77,10 +100,14 @@ class FakeELBv2:
             descriptions.append({"ResourceArn": arn, "Tags": self.tags_by_arn.get(arn, [])})
         return {"TagDescriptions": copy.deepcopy(descriptions)}
 
-    def describe_target_groups(self, LoadBalancerArn: str) -> dict:
-        return {
-            "TargetGroups": copy.deepcopy(self.target_groups_by_lb_arn.get(LoadBalancerArn, []))
-        }
+    def describe_target_groups(self, LoadBalancerArn: str, Marker: str | None = None) -> dict:
+        self.markers.append(Marker)
+        items, nxt = _page(self.target_groups_by_lb_arn.get(LoadBalancerArn, []), Marker,
+                           self.page_size)
+        page = {"TargetGroups": items}
+        if nxt:
+            page["NextMarker"] = nxt
+        return page
 
     def describe_target_health(self, TargetGroupArn: str) -> dict:
         return {
