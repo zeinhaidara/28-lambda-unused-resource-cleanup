@@ -90,20 +90,60 @@ actions each Lambda needs are in `iam/scanner-policy.json` and
 
 - Load balancer orphan detection only inspects target health, not request
   metrics, access logs, or listener rules.
-- AMI "in use" check only looks at `DescribeInstances` across all
-  reservations; it does not check launch templates, Auto Scaling groups,
-  or other AMI references (snapshots, other accounts via sharing).
+- The AMI "in use" check only looks at instances (`DescribeInstances`,
+  every page). It does **not** look at launch templates or Auto Scaling
+  launch configurations, so an AMI that only a launch template or launch
+  configuration references can be approved and deregistered, and the next
+  scale-out would then fail. It also ignores other AMI references (other
+  accounts via sharing).
 - The re-check gate only re-validates the "unused" condition; it does not
   detect a resource being renamed/retagged to use a different ID.
-- Several of the EC2 delete actions used here (`ReleaseAddress`,
-  `DeregisterImage`, `DeleteSecurityGroup`) do not support resource-level
-  IAM scoping, so those statements use `Resource: "*"`. The SNS/SQS/log
-  statements are scoped to specific ARNs.
+- The scanner's own list calls are not paginated yet; the cleanup recheck
+  is. A resource the scanner misses on a later page can't be deleted by
+  mistake, because the recheck reads every page before any delete.
 - No retry/backoff logic around AWS API calls is implemented; a failure
   mid-batch stops that record but does not roll back earlier deletes in
   the same invocation.
 
+## IAM scoping (checked against AWS docs)
+
+Checked on 2026-11-20 against the AWS Service Authorization Reference
+("Actions, resources, and condition keys" for Amazon EC2 and for Elastic
+Load Balancing V2, `docs.aws.amazon.com/service-authorization/latest/reference/list_ec2.html`
+and `list_elbv2.html`, plus the same data in the programmatic reference at
+`servicereference.us-east-1.amazonaws.com`):
+
+| Action | Resource type | `aws:ResourceTag/${TagKey}` |
+|---|---|---|
+| `ec2:ReleaseAddress` | `elastic-ip` | supported |
+| `ec2:DeregisterImage` | `image` | supported |
+| `ec2:DeleteSecurityGroup` | `security-group` | supported |
+| `elasticloadbalancing:DeleteLoadBalancer` | `loadbalancer/app/`, `loadbalancer/net/`, `loadbalancer/gwy/` | supported |
+
+All four support resource-level permissions and tag conditions, so in
+`iam/cleanup-policy.json`:
+
+- the delete `Allow` statements are scoped to those resource ARNs in
+  account `123456789012` / `us-east-1` (placeholders; the image ARN has no
+  account field by design);
+- an explicit `Deny` on all four actions applies to any resource tagged
+  `cleanup-protect=true`, so a protected resource can't be deleted even if a
+  bug or a hand-written approval message names it. The match is exact and
+  case-sensitive, the same as the code's protect-tag check; if you change
+  `PROTECT_TAG_KEY`/`PROTECT_TAG_VALUE`, change the policy too.
+
+Only the read-only `Describe*` actions keep `Resource: "*"`, because they
+don't support resource-level permissions. A test fails if a delete action
+ever goes back to `"*"` or the `Deny` disappears.
+
 ## Security notes
+
+- **Approval queue access:** the SQS queue's resource policy must allow
+  `sqs:SendMessage` only from the principal that runs your approval
+  workflow (for example one IAM role). Anyone who can send to the queue can
+  ask for deletes; the recheck and the protect-tag `Deny` limit the damage,
+  but they don't replace this control. The queue policy is not part of this
+  repo.
 
 No AWS credentials are used anywhere in this repo; all tests run against
 hand-written fakes of the boto3 clients. The IAM policies in `iam/` are
@@ -123,11 +163,14 @@ successfully deleted items) and skip it rather than erroring.
 Tested: scan logic for all four resource kinds (including protect-tag and
 age-threshold negative cases), SNS publish payload shape, cleanup re-check
 gate for all four kinds (including "state changed, must skip" negative
-cases), dry-run vs apply behavior, and end-to-end handler tests against
+cases), recheck pagination (multi-page fakes where the in-use item is only
+on page 2), dry-run vs apply behavior, the IAM policy's structure (scoped
+deletes, protect-tag `Deny`), and end-to-end handler tests against
 SQS-shaped events. All AWS clients are hand-written fakes — no moto, no
 real AWS account, no network calls anywhere in this repo.
 
 Not tested: this has never been deployed to or run against a real AWS
-account. Lambda packaging/deployment, EventBridge scheduling, and the
+account, and the IAM policy has never been evaluated by IAM (the test only
+checks its structure). Lambda packaging/deployment, EventBridge scheduling, and the
 SNS/SQS wiring between the two Lambdas are not exercised — only the
 Python logic inside each handler is.
