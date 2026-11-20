@@ -123,3 +123,68 @@ def test_process_approval_message_never_touches_unlisted_resources():
     assert result["deleted"] == ["elastic_ip:eipalloc-approved"]
     assert ec2.released_allocation_ids == ["eipalloc-approved"]
     assert "eipalloc-not-approved" in [a["AllocationId"] for a in ec2.addresses]
+
+
+# --- pagination: the in-use evidence is only on page 2 -----------------------
+
+
+def test_recheck_finds_ami_in_use_on_second_page():
+    ec2 = FakeEC2(page_size=1)
+    ec2.images = [{"ImageId": "ami-1", "CreationDate": "2020-01-01T00:00:00.000Z", "Tags": []}]
+    ec2.reservations = [
+        {"Instances": [{"ImageId": "ami-other"}]},
+        {"Instances": [{"ImageId": "ami-1"}]},  # page 2
+    ]
+    item = ApprovalItem(kind="ami", resource_id="ami-1", region="us-east-1")
+
+    outcome = process_item(ec2, FakeELBv2(), APPLY_CFG, item)
+
+    assert outcome == "skipped"
+    assert ec2.deregistered_image_ids == []
+    assert ec2.page_tokens["instances"] == [None, "1"]
+
+
+def test_recheck_finds_security_group_attached_on_second_page():
+    ec2 = FakeEC2(page_size=1)
+    ec2.security_groups = [{"GroupId": "sg-1", "GroupName": "app", "Tags": []}]
+    ec2.network_interfaces = [
+        {"Groups": [{"GroupId": "sg-other"}]},
+        {"Groups": [{"GroupId": "sg-1"}]},  # page 2
+    ]
+    item = ApprovalItem(kind="security_group", resource_id="sg-1", region="us-east-1")
+
+    outcome = process_item(ec2, FakeELBv2(), APPLY_CFG, item)
+
+    assert outcome == "skipped"
+    assert ec2.deleted_group_ids == []
+    assert ec2.page_tokens["enis"] == [None, "1"]
+
+
+def test_recheck_finds_healthy_target_group_on_second_page():
+    elbv2 = FakeELBv2(page_size=1)
+    elbv2.load_balancers = [{"LoadBalancerArn": "arn:lb:1"}]
+    elbv2.target_groups_by_lb_arn = {
+        "arn:lb:1": [{"TargetGroupArn": "arn:tg:empty"}, {"TargetGroupArn": "arn:tg:live"}]
+    }
+    elbv2.target_health_by_tg_arn = {"arn:tg:live": [{"TargetHealth": {"State": "healthy"}}]}
+    item = ApprovalItem(kind="load_balancer", resource_id="arn:lb:1", region="us-east-1")
+
+    outcome = process_item(FakeEC2(), elbv2, APPLY_CFG, item)
+
+    assert outcome == "skipped"
+    assert elbv2.deleted_lb_arns == []
+    assert elbv2.markers == [None, "1"]
+
+
+def test_unused_ami_across_all_pages_is_still_deleted():
+    ec2 = FakeEC2(page_size=1)
+    ec2.images = [{"ImageId": "ami-1", "CreationDate": "2020-01-01T00:00:00.000Z", "Tags": []}]
+    ec2.reservations = [
+        {"Instances": [{"ImageId": "ami-a"}]},
+        {"Instances": [{"ImageId": "ami-b"}]},
+        {"Instances": [{"ImageId": "ami-c"}]},
+    ]
+    item = ApprovalItem(kind="ami", resource_id="ami-1", region="us-east-1")
+
+    assert process_item(ec2, FakeELBv2(), APPLY_CFG, item) == "deleted"
+    assert ec2.page_tokens["instances"] == [None, "1", "2"]
