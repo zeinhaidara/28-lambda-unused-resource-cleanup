@@ -21,6 +21,19 @@ class RecheckFailed(Exception):
     """Raised when a resource no longer matches the approved unused state."""
 
 
+def _all_pages(call: Any, key: str, token_in: str = "NextToken",
+               token_out: str = "NextToken", **kwargs: Any) -> list[dict]:
+    """Every item across pages. EC2 uses NextToken; ELBv2 uses Marker/NextMarker."""
+    items: list[dict] = []
+    while True:
+        page = call(**kwargs)
+        items.extend(page.get(key, []))
+        token = page.get(token_out)
+        if not token:
+            return items
+        kwargs[token_in] = token
+
+
 def _recheck_eip(ec2: Any, resource_id: str) -> None:
     response = ec2.describe_addresses(AllocationIds=[resource_id])
     addresses = response.get("Addresses", [])
@@ -38,9 +51,10 @@ def _recheck_ami(ec2: Any, resource_id: str) -> None:
     images = ec2.describe_images(ImageIds=[resource_id]).get("Images", [])
     if not images:
         raise RecheckFailed(f"ami {resource_id} no longer exists")
+    # A missed page here could mean deleting an AMI that is in use, so read them all.
     in_use = {
         instance["ImageId"]
-        for reservation in ec2.describe_instances().get("Reservations", [])
+        for reservation in _all_pages(ec2.describe_instances, "Reservations")
         for instance in reservation.get("Instances", [])
     }
     if resource_id in in_use:
@@ -57,7 +71,7 @@ def _recheck_security_group(ec2: Any, resource_id: str) -> None:
         raise RecheckFailed(f"security group {resource_id} no longer exists")
     referenced = {
         group["GroupId"]
-        for eni in ec2.describe_network_interfaces().get("NetworkInterfaces", [])
+        for eni in _all_pages(ec2.describe_network_interfaces, "NetworkInterfaces")
         for group in eni.get("Groups", [])
     }
     if resource_id in referenced:
@@ -72,8 +86,12 @@ def _recheck_load_balancer(elbv2: Any, resource_id: str) -> None:
     lbs = elbv2.describe_load_balancers(LoadBalancerArns=[resource_id]).get("LoadBalancers", [])
     if not lbs:
         raise RecheckFailed(f"load balancer {resource_id} no longer exists")
-    target_groups = elbv2.describe_target_groups(LoadBalancerArn=resource_id).get(
-        "TargetGroups", []
+    target_groups = _all_pages(
+        elbv2.describe_target_groups,
+        "TargetGroups",
+        token_in="Marker",
+        token_out="NextMarker",
+        LoadBalancerArn=resource_id,
     )
     for tg in target_groups:
         health = elbv2.describe_target_health(TargetGroupArn=tg["TargetGroupArn"])
