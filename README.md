@@ -3,6 +3,11 @@
 Scheduled AWS Lambda pair that finds unused EC2/ELB resources and deletes
 only what a human has explicitly approved.
 
+Why it matters: unattached Elastic IPs, old AMIs, unused security groups and
+idle load balancers keep costing money and clutter every audit, but deleting
+them automatically is risky. Splitting "find" from "delete" with a human in
+between keeps the savings without the surprise.
+
 **Scope:** AWS only. The original brief mentioned Azure Functions as an
 alternative; this implementation is AWS Lambda only, and that is the only
 scope covered here.
